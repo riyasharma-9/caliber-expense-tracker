@@ -1,6 +1,26 @@
 // API Base URL
 const API_URL = '/api';
 
+// Fallback configuration for GitHub Pages/Offline
+const DEFAULT_CATEGORIES = ["Food", "Rent", "Utilities", "Entertainment", "Salary", "Misc", "Subscriptions"];
+let useLocalStorage = window.location.hostname.endsWith('github.io') || window.location.protocol === 'file:';
+
+// Helper: Read from localStorage
+function getLocalData() {
+  const txs = localStorage.getItem('caliber_transactions');
+  const cats = localStorage.getItem('caliber_categories');
+  return {
+    transactions: txs ? JSON.parse(txs) : [],
+    categories: cats ? JSON.parse(cats) : DEFAULT_CATEGORIES
+  };
+}
+
+// Helper: Write to localStorage
+function saveLocalData(data) {
+  localStorage.setItem('caliber_transactions', JSON.stringify(data.transactions));
+  localStorage.setItem('caliber_categories', JSON.stringify(data.categories));
+}
+
 // Application State
 let state = {
   transactions: [],
@@ -43,12 +63,25 @@ const elements = {
 
 // Reset database and fetch data on page load/refresh
 async function resetAndFetchData() {
+  if (useLocalStorage) {
+    const data = getLocalData();
+    data.transactions = [];
+    saveLocalData(data);
+    await fetchData();
+    return;
+  }
+
   try {
-    await fetch(`${API_URL}/reset`, {
+    const response = await fetch(`${API_URL}/reset`, {
       method: 'POST'
     });
+    if (!response.ok) throw new Error();
   } catch (error) {
-    console.error('Failed to reset on load:', error);
+    console.warn('API /reset failed, falling back to localStorage');
+    useLocalStorage = true;
+    const data = getLocalData();
+    data.transactions = [];
+    saveLocalData(data);
   } finally {
     await fetchData();
   }
@@ -94,6 +127,14 @@ function formatCurrency(value) {
 
 // Fetch all transactions and categories
 async function fetchData() {
+  if (useLocalStorage) {
+    const data = getLocalData();
+    state.transactions = data.transactions;
+    state.categories = data.categories;
+    updateUI();
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/data`);
     if (!response.ok) throw new Error('Network response was not ok');
@@ -104,7 +145,12 @@ async function fetchData() {
     
     updateUI();
   } catch (error) {
-    console.error('Failed to load application data:', error);
+    console.warn('Failed to fetch from API, falling back to localStorage:', error);
+    useLocalStorage = true;
+    const data = getLocalData();
+    state.transactions = data.transactions;
+    state.categories = data.categories;
+    updateUI();
   }
 }
 
@@ -335,6 +381,24 @@ async function handleTransactionSubmit(e) {
   
   const payload = { type, amount, category, date, description };
   
+  if (useLocalStorage) {
+    const data = getLocalData();
+    const newTransaction = {
+      id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+      ...payload
+    };
+    data.transactions.push(newTransaction);
+    saveLocalData(data);
+    
+    // Clear inputs except type and date
+    elements.amountInput.value = '';
+    elements.descriptionInput.value = '';
+    elements.categorySelect.selectedIndex = 0;
+    
+    await fetchData();
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/transactions`, {
       method: 'POST',
@@ -363,6 +427,14 @@ async function handleTransactionSubmit(e) {
 async function deleteTransaction(id) {
   if (!confirm('Are you sure you want to delete this transaction?')) return;
   
+  if (useLocalStorage) {
+    const data = getLocalData();
+    data.transactions = data.transactions.filter(t => t.id !== id);
+    saveLocalData(data);
+    await fetchData();
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/transactions/${id}`, {
       method: 'DELETE'
@@ -400,6 +472,31 @@ async function handleCategorySubmit(e) {
   const category = elements.newCategoryInput.value.trim();
   if (!category) return;
   
+  if (useLocalStorage) {
+    const data = getLocalData();
+    
+    // Check for duplicate (case insensitive)
+    const exists = data.categories.some(c => c.toLowerCase() === category.toLowerCase());
+    if (exists) {
+      elements.categoryError.textContent = 'Category already exists';
+      return;
+    }
+
+    data.categories.push(category);
+    saveLocalData(data);
+    
+    // Update local state categories
+    state.categories = data.categories;
+    
+    // Refresh dropdown and select the new category
+    renderCategories();
+    elements.categorySelect.value = category;
+    
+    // Close modal
+    closeCategoryModal();
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/categories`, {
       method: 'POST',
@@ -434,6 +531,14 @@ async function handleResetDatabase() {
     return;
   }
   
+  if (useLocalStorage) {
+    const data = getLocalData();
+    data.transactions = [];
+    saveLocalData(data);
+    await fetchData();
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/reset`, {
       method: 'POST'
